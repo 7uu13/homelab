@@ -1,0 +1,42 @@
+- name: Setup nginx and certbot
+  become: true
+
+  block:
+    - name: Install epel-release repo
+      ansible.builtin.dnf:
+        name:
+          - epel-release
+        state: present
+
+    - name: Install nginx
+      ansible.builtin.dnf:
+        name:
+          - nginx
+        state: present
+
+    - name: Add nginx configuration file
+      ansible.builtin.template:
+        src: nginx.conf.j2
+        dest: /etc/nginx/nginx.conf
+        owner: root
+        mode: "0644"
+      notify:
+        - restart nginx
+
+    - name: Add nginx folders
+      ansible.builtin.copy:
+        src: "{{ item }}"
+        dest: /etc/nginx
+        owner: root
+        mode: "0755"
+      loop:
+        - conf.d
+        - snippets
+      notify:
+        - restart nginx
+
+    - name: Ensure that nginx is started
+      ansible.builtin.service:
+        name: nginx
+        state: started
+        enabled: true
