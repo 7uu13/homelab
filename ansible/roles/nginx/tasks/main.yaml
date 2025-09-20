@@ -18,14 +18,17 @@
       ansible.builtin.template:
         src: nginx.conf.j2
         dest: /etc/nginx/nginx.conf
+        owner: root
+        mode: "0644"
       notify:
         - restart nginx
 
-      # should add configuration validation aswell
     - name: Add nginx folders
       ansible.builtin.copy:
         src: "{{ item }}"
         dest: /etc/nginx
+        owner: root
+        mode: "0755"
       loop:
         - conf.d
         - snippets

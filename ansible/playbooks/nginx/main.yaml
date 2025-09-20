@@ -1,0 +1,6 @@
+---
+- name: Install and setup Nginx
+  hosts: "{{ ansible_limit | default(omit) }}"
+  tasks:
+  roles:
+    - nginx
