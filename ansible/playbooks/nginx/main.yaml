@@ -1,6 +1,9 @@
 ---
 - name: Install and setup Nginx
   hosts: "{{ ansible_limit | default(omit) }}"
+  vars_files:
+    - group_vars/web_servers/secrets.yaml
   tasks:
   roles:
+    - certbot
     - nginx

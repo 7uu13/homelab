@@ -1,3 +1,8 @@
+### Cloudflare
+*.cloudflare.ini
+### ANSIBLE
+
+### TERRAFORM
 # Local .terraform directories
 .terraform/
 

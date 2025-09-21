@@ -1,0 +1,24 @@
+---
+# Default configuration for Certbot SSL role
+certbot_base_path: "/opt/certbot"
+certbot_certs_path: "{{ certbot_base_path }}/ssl-certs"
+certbot_config_path: "{{ certbot_base_path }}/config"
+certbot_work_path: "{{ certbot_base_path }}/work"
+certbot_logs_path: "{{ certbot_base_path }}/logs"
+
+certbot_email: "{{ certbot_email }}"
+certbot_domains: "{{ certbot_domains }}"
+certbot_ssl_docker_image: "certbot/dns-cloudflare"
+
+certbot_propagation_seconds: 15
+
+# Renewal configuration
+certbot_ssl_renewal_minute: "0"
+certbot_ssl_renewal_hour: "2"
+certbot_ssl_renewal_day: "1,15"
+certbot_ssl_renewal_enabled: true
+
+# Post-renewal hooks
+certbot_ssl_post_renewal_commands: []
+  # - "docker exec nginx nginx -s reload"
+  # - "systemctl reload haproxy"

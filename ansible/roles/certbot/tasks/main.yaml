@@ -1,0 +1,74 @@
+---
+- name: Setup nginx and certbot
+  become: true
+
+  block:
+    - name: Create certbot directory structure
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+      loop:
+        - "{{ certbot_base_path }}"
+        - "{{ certbot_certs_path }}"
+        - "{{ certbot_config_path }}"
+        - "{{ certbot_work_path }}"
+        - "{{ certbot_logs_path }}"
+      tags:
+        - certbot
+        - certbot_setup
+
+    - name: Create Cloudflare credentials file
+      ansible.builtin.template:
+        src: cloudflare.ini.j2
+        dest: "{{ certbot_base_path }}/cloudflare.ini"
+        owner: root
+        group: root
+        mode: "0600"
+      no_log: true
+      tags:
+        - certbot
+        - certbot_config
+
+    - name: Check if certificates already exist
+      ansible.builtin.stat:
+        path: "{{ certbot_certs_path }}/live/{{ item | regex_replace('^\\*\\.', '') }}/fullchain.pem"
+      register: cert_exists_results
+      loop: "{{ certbot_domains }}"
+      no_log: true
+
+    - name: Determine if any certificates are missing
+      ansible.builtin.set_fact:
+        certs_missing: "{{ cert_exists_results.results | selectattr('stat.exists', 'equalto', false) | list | length > 0 }}"
+
+    - name: Generate SSL certificates
+      community.docker.docker_container:
+        name: "certbot"
+        image: "certbot/dns-cloudflare:latest"
+        state: started
+        detach: false
+        cleanup: true
+        auto_remove: true
+        volumes:
+          - "{{ certbot_certs_path }}:/etc/letsencrypt"
+          - "{{ certbot_work_path }}:/var/lib/letsencrypt"
+          - "{{ certbot_logs_path }}:/var/log/letsencrypt"
+          - "{{ certbot_base_path }}/cloudflare.ini:/cloudflare.ini:ro"
+        command: >-
+          certonly --dns-cloudflare
+          --dns-cloudflare-credentials /cloudflare.ini
+          --dns-cloudflare-propagation-seconds {{ certbot_propagation_seconds }}
+          --email {{ certbot_email }}
+          --agree-tos --no-eff-email
+          --non-interactive
+          --keep-until-expiring
+          --expand
+          {% for domain in certbot_domains -%}
+          -d {{ domain }}
+          {% endfor %}
+      when: certs_missing | bool
+      tags:
+        - certbot
+        - certbot_generate
