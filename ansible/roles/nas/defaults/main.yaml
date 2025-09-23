@@ -1,0 +1,20 @@
+---
+zfs_pool: tank
+datasets:
+  - name: "{{ zfs_pool }}/isos"
+    mountpoint: /data/isos
+    nfs_networks:
+      - network: "*"
+        permissions: "rw"
+    properties:
+      compression: lz4
+      dedup: on
+      recordsize: 1M
+      atime: off
+    directories:
+      - "operating-systems/linux"
+      - "operating-systems/windows"
+      - "operating-systems/bsd"
+      - "rescue-tools"
+    file_owner: "nobody"
+    file_group: "nobody"

@@ -1,0 +1,7 @@
+---
+- name: Gather ZFS information
+  hosts: "{{ ansible_limit | default(omit) }}"
+  become: yes
+  tasks:
+  roles:
+    - nas
