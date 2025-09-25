@@ -1,0 +1,6 @@
+---
+- name: Setup NFS
+  hosts: "{{ ansible_limit | default(omit) }}"
+  tasks:
+  roles:
+    - nfs

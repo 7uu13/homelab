@@ -1,0 +1,39 @@
+- name: Setup ZFS
+  block:
+
+    - name: Gather ZFS pool facts
+      community.general.zpool_facts:
+        pool: "{{ zfs_pool }}"
+      register: zpool_status
+      ignore_errors: true
+
+    - name: Create root pool
+      ansible.builtin.command: zpool create tank mirror /dev/sda /dev/sdb
+      when: zpool_status.failed == true
+
+    - name: Create datasets
+      community.general.zfs:
+        name: "{{ item.name }}"
+        state: present
+        extra_zfs_properties: "{{ item.properties | default({}) }}"
+      loop: "{{ datasets }}"
+      tags:
+        - ds
+
+    - name: Createsubdirectory structure if enabled
+      ansible.builtin.file:
+        path: "{{ item.0.mountpoint }}/{{ item.1 }}"
+        state: directory
+        owner: nobody
+        group: nobody
+        mode: '0755'
+      with_subelements:
+        - "{{ datasets | selectattr('directories', 'defined') | list }}"
+        - directories
+      loop_control:
+        label: "{{ item.0.name }}/{{ item.1 }}"
+
+    - name: Configure ZFS native NFS sharing
+      command: zfs set sharenfs="{{ item.0.nfs_networks }}" "{{ item.0.name }}"
+      loop:
+        - "{{ datasets }}"

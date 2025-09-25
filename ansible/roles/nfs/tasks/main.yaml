@@ -1,0 +1,16 @@
+- name: Setup nginx and certbot
+  become: true
+
+  block:
+    - name: Install nfs
+      ansible.builtin.package:
+        name: nfs-utils
+        state: present
+
+    - name: Ensure nfs services are started
+      ansible.builtin.service:
+        name: "{{ item }}"
+        state: started
+      loop:
+        - nfs-server
+        - rpc-statd
