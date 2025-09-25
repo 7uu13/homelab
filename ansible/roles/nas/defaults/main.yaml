@@ -3,18 +3,17 @@ zfs_pool: tank
 datasets:
   - name: "{{ zfs_pool }}/isos"
     mountpoint: /data/isos
-    nfs_networks:
-      - network: "*"
-        permissions: "rw"
+    nfs_networks: "rw=10.0.1.0/16,sync,wdelay,hide,no_subtree_check,sec=sys,insecure,no_root_squash,no_all_squash"
     properties:
       compression: lz4
-      dedup: on
+      dedup: true
       recordsize: 1M
-      atime: off
+      atime: false
     directories:
       - "operating-systems/linux"
       - "operating-systems/windows"
       - "operating-systems/bsd"
       - "rescue-tools"
+    # questionable
     file_owner: "nobody"
     file_group: "nobody"

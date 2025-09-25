@@ -1,7 +1,6 @@
 ---
-- name: Gather ZFS information
+- name: Setup NFS
   hosts: "{{ ansible_limit | default(omit) }}"
-  become: true
   tasks:
   roles:
-    - nas
+    - nfs

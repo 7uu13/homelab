@@ -1,5 +1,6 @@
 - name: Setup ZFS
   block:
+
     - name: Gather ZFS pool facts
       community.general.zpool_facts:
         pool: "{{ zfs_pool }}"
@@ -10,7 +11,7 @@
       ansible.builtin.command: zpool create tank mirror /dev/sda /dev/sdb
       when: zpool_status.failed == true
 
-    - name: Ensure ZFS datasets exist
+    - name: Create datasets
       community.general.zfs:
         name: "{{ item.name }}"
         state: present
@@ -19,7 +20,7 @@
       tags:
         - ds
 
-    - name: Create ISO directory structure
+    - name: Createsubdirectory structure if enabled
       ansible.builtin.file:
         path: "{{ item.0.mountpoint }}/{{ item.1 }}"
         state: directory
@@ -27,34 +28,12 @@
         group: nobody
         mode: '0755'
       with_subelements:
-        - "{{ datasets }}"
+        - "{{ datasets | selectattr('directories', 'defined') | list }}"
         - directories
       loop_control:
         label: "{{ item.0.name }}/{{ item.1 }}"
 
-    # - name: Build NFS share string for ZFS
-    #   set_fact:
-    #     nfs_share_options: >-
-    #       {%- set options = [] -%}
-    #       {%- for net in nfs_networks -%}
-    #         {%- if net.permissions == 'rw' -%}
-    #           {%- set _ = options.append('rw=@' + net.network) -%}
-    #         {%- elif net.permissions == 'ro' -%}
-    #           {%- set _ = options.append('ro=' + net.network) -%}
-    #         {%- endif -%}
-    #       {%- endfor -%}
-    #       {{ options | join(',') }},sync,no_subtree_check,insecure
-    #
-    # - name: Configure ZFS native NFS sharing
-    #   command: zfs set sharenfs="{{ nfs_share_options }}" tuulemeri/iso
-    #   register: zfs_share_result
-    #
-    # - name: Verify ZFS NFS sharing is enabled
-    #   command: zfs get sharenfs tuulemeri/iso
-    #   register: share_status
-    #   changed_when: false
-    #
-    # - name: Display NFS share status
-    #   debug:
-    #     msg: "ZFS NFS sharing status: tuulemeri/iso"
-    #
+    - name: Configure ZFS native NFS sharing
+      command: zfs set sharenfs="{{ item.0.nfs_networks }}" "{{ item.0.name }}"
+      loop:
+        - "{{ datasets }}"
