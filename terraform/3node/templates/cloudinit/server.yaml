@@ -1,0 +1,10 @@
+${base_config}
+
+yum_repos:
+  epel:
+    name: EPEL
+    baseurl: https://download.fedoraproject.org/pub/epel/$releasever/Everything/$basearch
+    enabled: true
+    gpgcheck: true
+    gpgkey: https://download.fedoraproject.org/pub/epel/RPM-GPG-KEY-EPEL-$releasever
+

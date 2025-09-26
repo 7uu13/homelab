@@ -1,0 +1,29 @@
+#cloud-config
+hostname: ${hostname}
+fqdn : ${hostname}.local
+manage_etc_hosts: true
+
+users:
+  - name: ${admin_user}
+    groups: wheel 
+    shell: /bin/bash
+    sudo: ['ALL=(ALL) NOPASSWD:ALL']
+    ssh_authorized_keys:
+      - ${ssh_public_key}
+
+package_update: true
+package_upgrade: true
+
+packages:
+  - vim
+  - curl
+  - git
+  - htop
+  - qemu-guest-agent
+
+runcmd:
+  - dnf install -y vim htop git curl
+
+  - systemctl enable --now qemu-guest-agent
+  - systemctl enable --now sshd
+

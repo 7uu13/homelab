@@ -1,0 +1,26 @@
+#cloud-config
+hostname: rocky
+fqdn: rocky-test.example.local
+
+users:
+  - name: tuule
+    groups: sudo, wheel
+    shell: /bin/bash
+    sudo: ['ALL=(ALL) NOPASSWD:ALL']
+    ssh_authorized_keys:
+      - ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAOTjRojKwhVDNTDzI8NoKCtxm2eWzCJ2rp6Tpi3bxtG tuunikala@Johans-MacBook-Pro.local
+
+package_update: true
+package_upgrade: true
+packages:
+  - vim
+  - curl
+  - git
+
+runcmd:
+  - echo "Welcome to Rocky!" > /etc/motd
+  - systemctl enable sshd
+  - systemctl start sshd
+
+final_message: "Rocky is ready! 🚀"
+
