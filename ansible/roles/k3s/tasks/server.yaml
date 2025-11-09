@@ -1,0 +1,331 @@
+---
+- name: Check if K3s is already installed
+  ansible.builtin.stat:
+    path: /usr/local/bin/k3s
+  register: k3s_binary
+
+- name: Download K3s installation script
+  ansible.builtin.get_url:
+    url: https://get.k3s.io
+    dest: /tmp/k3s-install.sh
+    mode: '0755'
+  when: not k3s_binary.stat.exists
+
+- name: Determine if this is the first server
+  ansible.builtin.set_fact:
+    is_first_server: "{{ groups['k3s_servers'][0] == inventory_hostname }}"
+
+- name: Install K3s server (first server with cluster-init)
+  ansible.builtin.shell: |
+    INSTALL_K3S_VERSION={{ k3s_version }} \
+    sh /tmp/k3s-install.sh server \
+    --cluster-init \
+    {% for key, value in k3s_server_config.items() %}
+    --{{ key }}={{ value }} \
+    {% endfor %}
+  args:
+    creates: /usr/local/bin/k3s
+  when:
+    - not k3s_binary.stat.exists
+    - is_first_server
+  register: k3s_server_installed
+
+- name: Wait for first server to be ready
+  ansible.builtin.wait_for:
+    path: /var/lib/rancher/k3s/server/token
+    timeout: 300
+  when: is_first_server
+
+- name: Get K3s token from first server
+  ansible.builtin.slurp:
+    src: /var/lib/rancher/k3s/server/token
+  register: k3s_token_raw
+  delegate_to: "{{ groups['k3s_servers'][0] }}"
+  run_once: true
+  when: not is_first_server or groups['k3s_servers'] | length > 1
+
+- name: Set K3s token fact
+  ansible.builtin.set_fact:
+    k3s_token: "{{ k3s_token_raw.content | b64decode | trim }}"
+  when:
+    - k3s_token_raw is defined
+    - k3s_token_raw.content is defined
+
+- name: Install K3s server (additional servers joining cluster)
+  ansible.builtin.shell: |
+    INSTALL_K3S_VERSION={{ k3s_version }} \
+    K3S_TOKEN={{ k3s_token }} \
+    sh /tmp/k3s-install.sh server \
+    --server https://{{ hostvars[groups['k3s_servers'][0]]['ansible_default_ipv4']['address'] }}:6443 \
+    {% for key, value in k3s_server_config.items() %}
+    --{{ key }}={{ value }} \
+    {% endfor %}
+  args:
+    creates: /usr/local/bin/k3s
+  when:
+    - not k3s_binary.stat.exists
+    - not is_first_server
+  register: k3s_server_additional_installed
+
+- name: Reload systemd daemon
+  ansible.builtin.systemd:
+    daemon_reload: yes
+  when: k3s_server_installed is changed or k3s_server_additional_installed is changed
+
+- name: Ensure K3s service is enabled and started
+  ansible.builtin.systemd:
+    name: k3s
+    enabled: yes
+    state: started
+
+- name: Wait for K3s to be ready
+  ansible.builtin.wait_for:
+    path: /etc/rancher/k3s/k3s.yaml
+    timeout: 300
+
+- name: Get K3s kubeconfig
+  ansible.builtin.slurp:
+    src: /etc/rancher/k3s/k3s.yaml
+  register: k3s_kubeconfig
+  run_once: true
+  delegate_to: "{{ groups['k3s_servers'][0] }}"
+
+- name: Save kubeconfig locally
+  ansible.builtin.copy:
+    content: "{{ k3s_kubeconfig.content | b64decode | regex_replace('127.0.0.1', hostvars[groups['k3s_servers'][0]]['ansible_default_ipv4']['address']) }}"
+    dest: "{{ playbook_dir }}/k3s-kubeconfig.yaml"
+    mode: '0600'
+  delegate_to: localhost
+  run_once: true
+  become: no
+
+- name: Display kubeconfig location
+  ansible.builtin.debug:
+    msg: "Kubeconfig saved to {{ playbook_dir }}/k3s-kubeconfig.yaml"
+  run_once: true
+
+- name: Wait for K3s API server to be fully ready
+  ansible.builtin.shell: |
+    /usr/local/bin/k3s kubectl get nodes
+  environment:
+    KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+  register: kubectl_result
+  retries: 12
+  delay: 5
+  until: kubectl_result.rc == 0
+  run_once: true
+  delegate_to: "{{ groups['k3s_servers'][0] }}"
+  changed_when: false
+
+- name: Install nginx ingress controller
+  ansible.builtin.shell: |
+    /usr/local/bin/k3s kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/controller-{{ nginx_ingress_version }}/deploy/static/provider/baremetal/deploy.yaml
+  environment:
+    KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+  run_once: true
+  delegate_to: "{{ groups['k3s_servers'][0] }}"
+  register: nginx_ingress_result
+  changed_when: "'created' in nginx_ingress_result.stdout or 'configured' in nginx_ingress_result.stdout"
+  when: k3s_install_nginx_ingress | default(true)
+
+- name: Wait for nginx ingress controller to be ready
+  ansible.builtin.shell: |
+    /usr/local/bin/k3s kubectl wait --namespace ingress-nginx \
+      --for=condition=ready pod \
+      --selector=app.kubernetes.io/component=controller \
+      --timeout=300s
+  environment:
+    KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+  run_once: true
+  delegate_to: "{{ groups['k3s_servers'][0] }}"
+  register: nginx_wait_result
+  retries: 3
+  delay: 10
+  until: nginx_wait_result.rc == 0
+  changed_when: false
+  when: k3s_install_nginx_ingress | default(true)
+
+- name: Get nginx ingress controller service
+  ansible.builtin.shell: |
+    /usr/local/bin/k3s kubectl get svc -n ingress-nginx ingress-nginx-controller -o wide
+  environment:
+    KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+  run_once: true
+  delegate_to: "{{ groups['k3s_servers'][0] }}"
+  register: nginx_svc_result
+  changed_when: false
+  when: k3s_install_nginx_ingress | default(true)
+
+- name: Display nginx ingress controller info
+  ansible.builtin.debug:
+    msg: |
+      Nginx Ingress Controller installed successfully!
+      {{ nginx_svc_result.stdout }}
+  run_once: true
+  when:
+    - k3s_install_nginx_ingress | default(true)
+    - nginx_svc_result is defined
+
+- name: Create ArgoCD namespace
+  ansible.builtin.shell: |
+    /usr/local/bin/k3s kubectl create namespace {{ argocd_namespace }} --dry-run=client -o yaml | /usr/local/bin/k3s kubectl apply -f -
+  environment:
+    KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+  run_once: true
+  delegate_to: "{{ groups['k3s_servers'][0] }}"
+  changed_when: false
+  when: k3s_install_argocd | default(true)
+
+- name: Install ArgoCD
+  ansible.builtin.shell: |
+    /usr/local/bin/k3s kubectl apply -n {{ argocd_namespace }} -f https://raw.githubusercontent.com/argoproj/argo-cd/{{ argocd_version }}/manifests/install.yaml
+  environment:
+    KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+  run_once: true
+  delegate_to: "{{ groups['k3s_servers'][0] }}"
+  register: argocd_install_result
+  changed_when: "'created' in argocd_install_result.stdout or 'configured' in argocd_install_result.stdout"
+  when: k3s_install_argocd | default(true)
+
+- name: Configure ArgoCD server to run in insecure mode
+  ansible.builtin.shell: |
+    /usr/local/bin/k3s kubectl patch deployment argocd-server -n {{ argocd_namespace }} \
+      --type='json' \
+      -p='[{"op": "add", "path": "/spec/template/spec/containers/0/args/-", "value": "--insecure"}]'
+  environment:
+    KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+  run_once: true
+  delegate_to: "{{ groups['k3s_servers'][0] }}"
+  register: argocd_insecure_result
+  changed_when: "'patched' in argocd_insecure_result.stdout"
+  when:
+    - k3s_install_argocd | default(true)
+    - argocd_insecure | default(false)
+
+- name: Wait for ArgoCD server to be ready
+  ansible.builtin.shell: |
+    /usr/local/bin/k3s kubectl wait --namespace {{ argocd_namespace }} \
+      --for=condition=ready pod \
+      --selector=app.kubernetes.io/name=argocd-server \
+      --timeout=300s
+  environment:
+    KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+  run_once: true
+  delegate_to: "{{ groups['k3s_servers'][0] }}"
+  register: argocd_wait_result
+  retries: 3
+  delay: 10
+  until: argocd_wait_result.rc == 0
+  changed_when: false
+  when: k3s_install_argocd | default(true)
+
+- name: Create ArgoCD Ingress resource
+  ansible.builtin.shell: |
+    cat <<EOF | /usr/local/bin/k3s kubectl apply -f -
+    apiVersion: networking.k8s.io/v1
+    kind: Ingress
+    metadata:
+      name: argocd-server-ingress
+      namespace: {{ argocd_namespace }}
+      annotations:
+        nginx.ingress.kubernetes.io/ssl-passthrough: "{{ 'false' if argocd_insecure else 'true' }}"
+        nginx.ingress.kubernetes.io/backend-protocol: "{{ 'HTTP' if argocd_insecure else 'HTTPS' }}"
+    spec:
+      ingressClassName: {{ argocd_ingress_class }}
+      rules:
+      - host: {{ argocd_hostname }}
+        http:
+          paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: argocd-server
+                port:
+                  {{ 'number: 80' if argocd_insecure else 'number: 443' }}
+    EOF
+  environment:
+    KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+  run_once: true
+  delegate_to: "{{ groups['k3s_servers'][0] }}"
+  register: argocd_ingress_result
+  changed_when: "'created' in argocd_ingress_result.stdout or 'configured' in argocd_ingress_result.stdout"
+  when:
+    - k3s_install_argocd | default(true)
+    - argocd_hostname | length > 0
+
+- name: Patch ArgoCD server service to NodePort
+  ansible.builtin.shell: |
+    /usr/local/bin/k3s kubectl patch svc argocd-server -n {{ argocd_namespace }} -p '{"spec": {"type": "NodePort"}}'
+  environment:
+    KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+  run_once: true
+  delegate_to: "{{ groups['k3s_servers'][0] }}"
+  register: argocd_patch_result
+  changed_when: "'patched' in argocd_patch_result.stdout"
+  when: k3s_install_argocd | default(true)
+
+- name: Get ArgoCD initial admin password
+  ansible.builtin.shell: |
+    /usr/local/bin/k3s kubectl get secret argocd-initial-admin-secret -n {{ argocd_namespace }} -o jsonpath="{.data.password}" | base64 -d
+  environment:
+    KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+  run_once: true
+  delegate_to: "{{ groups['k3s_servers'][0] }}"
+  register: argocd_password
+  changed_when: false
+  when: k3s_install_argocd | default(true)
+
+- name: Get ArgoCD server NodePort
+  ansible.builtin.shell: |
+    /usr/local/bin/k3s kubectl get svc argocd-server -n {{ argocd_namespace }} -o jsonpath='{.spec.ports[?(@.name=="https")].nodePort}'
+  environment:
+    KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+  run_once: true
+  delegate_to: "{{ groups['k3s_servers'][0] }}"
+  register: argocd_nodeport
+  changed_when: false
+  when: k3s_install_argocd | default(true)
+
+- name: Display ArgoCD access information (with ingress)
+  ansible.builtin.debug:
+    msg: |
+
+      ==========================================
+      ArgoCD installed successfully!
+      ==========================================
+
+      Access ArgoCD at: {{ 'http' if argocd_insecure else 'https' }}://{{ argocd_hostname }}
+
+      Username: admin
+      Password: {{ argocd_password.stdout }}
+
+      Note: Make sure your DNS/proxy points {{ argocd_hostname }} to your nginx ingress controller.
+      ==========================================
+  run_once: true
+  when:
+    - k3s_install_argocd | default(true)
+    - argocd_password is defined
+    - argocd_hostname | length > 0
+
+- name: Display ArgoCD access information (NodePort)
+  ansible.builtin.debug:
+    msg: |
+
+      ==========================================
+      ArgoCD installed successfully!
+      ==========================================
+
+      Access ArgoCD at: https://{{ hostvars[groups['k3s_servers'][0]]['ansible_default_ipv4']['address'] }}:{{ argocd_nodeport.stdout }}
+
+      Username: admin
+      Password: {{ argocd_password.stdout }}
+
+      Note: The certificate is self-signed, you'll need to accept the browser warning.
+      ==========================================
+  run_once: true
+  when:
+    - k3s_install_argocd | default(true)
+    - argocd_password is defined
+    - argocd_nodeport is defined
+    - argocd_hostname | length == 0

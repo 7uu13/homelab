@@ -1,0 +1,8 @@
+---
+- name: Include server tasks
+  ansible.builtin.include_tasks: server.yaml
+  when: "'k3s_servers' in group_names"
+
+- name: Include agent tasks
+  ansible.builtin.include_tasks: agent.yaml
+  when: "'k3s_agents' in group_names"
